@@ -7,8 +7,16 @@
     <title>ml5.js faceMesh Webcam Example</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.10/p5.min.js"></script>
     <script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Remove default canvas margin injected by p5 */
+      canvas {
+        display: block;
+      }
+    </style>
   </head>
-  <body>
+  <body class="bg-black m-0 p-0 overflow-hidden w-screen h-screen flex items-center justify-center">
+    <div id="sketch-container" class="w-full h-full flex items-center justify-center"></div>
     <script src="sketch.js"></script>
   </body>
 </html>

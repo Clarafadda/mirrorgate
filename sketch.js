@@ -1,6 +1,8 @@
 let faceMesh;
+let handPose; // Added handPose
 let video;
 let faces = [];
+let hands = []; // Added hands array
 let state = "LOCKED";
 let openStartTime = 0;
 let shards = [];
@@ -9,16 +11,23 @@ let aiImages = [];
 const THRESHOLD = 12;
 const NB_FISSURES = 6;
 
-// Canvas élargi pour laisser de la place au texte sur les côtés
-const CANVAS_W = 960;
-const CANVAS_H = 540;
+// Base design dimensions for scaling fonts/strokes
+const BASE_W = 960;
+const BASE_H = 540;
 
-// Miroir centré dans le canvas
-const MIRROR_RX = 170;
-const MIRROR_RY = 220;
+// Set dynamically
+let CANVAS_W, CANVAS_H, SCALE;
 
-// Zone réservée au texte de chaque côté du miroir
-const TEXT_ZONE_WIDTH = 180; // espace disponible à gauche et à droite
+// Video source dimensions
+const VID_W = 640;
+const VID_H = 480;
+
+// ================= HAND GESTURE CONSTANTS =================
+const HOLD_FRAMES = 20; 
+const COOLDOWN_MS = 1200;
+let lastFingerCount = 0;
+let fingerHoldFrames = 0;
+let lastTriggerTime = 0;
 
 // ================= TEXTES PAR FRAGMENT =================
 const SHARD_TEXTS = [
@@ -32,62 +41,217 @@ const SHARD_TEXTS = [
 
 // ================= POINTS FOCAUX PAR IMAGE =================
 const FOCAL_POINTS = [
-  { x: 0.5,  y: 0.5  },
-  { x: 0.51, y: 0.6  },
-  { x: 0.38, y: 0.39 },
-  { x: 0.25, y: 0.49 },
-  { x: 0.5,  y: 0.48 },
-  { x: 0.58, y: 0.5  },
+  { x: 0.4,  y: 0.4  },
+  { x: 0.51, y: 0.56  },
+  { x: 0.6, y: 0.34 },
+  { x: 0.62, y: 0.55 },
+  { x: 0.55,  y: 0.45 },
+  { x: 0.45, y: 0.5  },
 ];
 
 const IMG_ZOOM = 1.0;
 
+function computeCanvasSize() {
+  CANVAS_W = windowWidth;
+  CANVAS_H = windowHeight;
+  SCALE = min(CANVAS_W / BASE_W, CANVAS_H / BASE_H);
+}
+
+function videoCoverScale() { return max(CANVAS_W / VID_W, CANVAS_H / VID_H); }
+function videoDisplayW()   { return VID_W * videoCoverScale(); }
+function videoDisplayH()   { return VID_H * videoCoverScale(); }
+function videoOffsetX()    { return (CANVAS_W - videoDisplayW()) / 2; }
+function videoOffsetY()    { return (CANVAS_H - videoDisplayH()) / 2; }
+
 function preload() {
   faceMesh = ml5.faceMesh({ maxFaces: 1, refineLandmarks: true, flipHorizontal: true });
+  // HandPose setup for 2 hands (to allow counting to 6)
+  handPose = ml5.handPose({ maxHands: 2, flipHorizontal: true });
 
   for (let i = 0; i < 6; i++) {
     let nom = "fragment3." + (i + 1) + ".png";
     aiImages[i] = loadImage(
       nom,
-      () => console.log("✅ Chargé : " + nom),
-      (err) => console.error("❌ Introuvable : " + nom + " → " + err)
+      () => console.log("Charge : " + nom),
+      (err) => console.error("Introuvable : " + nom + " -> " + err)
     );
   }
 }
 
 function setup() {
-  createCanvas(CANVAS_W, CANVAS_H);
-  // La webcam reste en 640×480, on l'affiche centrée dans le canvas
+  computeCanvasSize();
+  let cnv = createCanvas(CANVAS_W, CANVAS_H);
+  cnv.parent('sketch-container');
+
   video = createCapture(VIDEO);
-  video.size(640, 480);
+  video.size(VID_W, VID_H);
   video.hide();
+
   faceMesh.detectStart(video, gotFaces);
+  handPose.detectStart(video, gotHands);
 }
 
-// Offset pour centrer la vidéo 640×480 dans le canvas 960×540
-function videoOffsetX() { return (CANVAS_W - 640) / 2; }
-function videoOffsetY() { return (CANVAS_H - 480) / 2; }
+function windowResized() {
+  computeCanvasSize();
+  resizeCanvas(CANVAS_W, CANVAS_H);
+  if (state === "FISSURED" && shards.length > 0) {
+    createOrganicCracks();
+  }
+}
 
 function draw() {
   background(15);
   if (faces.length > 0) {
     let face = faces[0];
     if (state === "LOCKED") {
-      drawIntactMirror();
+      drawFullScreenVideo();
       checkEyesOpen(face);
     } else {
+      updateShardTimers(); // Auto-advance logic
+      checkHandGesture(); // Hand logic
       drawFissuredMirror();
     }
   }
 }
 
-// ================= GÉNÉRATION FISSURES SUR ELLIPSE =================
+// ================= AUTO TIMERS =================
 
-function pointOnEllipse(angle) {
-  return {
-    x: CANVAS_W / 2 + cos(angle) * MIRROR_RX,
-    y: CANVAS_H / 2 + sin(angle) * MIRROR_RY
-  };
+function updateShardTimers() {
+  let now = millis();
+  for (let s of shards) {
+    if (s.clickState === 1 && now - s.lastStateChange > 1200) {
+      advanceShardState(s);
+    } else if (s.clickState === 2 && now - s.lastStateChange > 2500) {
+      advanceShardState(s);
+    }
+  }
+}
+
+// ================= HAND GESTURE LOGIC =================
+
+function countFingers(hand) {
+  const kp = hand.keypoints;
+  const fingerUp = (tip, base) => kp[tip].y < kp[base].y;
+  let count = 0;
+  let wrist = kp[0];
+  if (abs(kp[4].x - wrist.x) > abs(kp[2].x - wrist.x)) count++; // Thumb
+  if (fingerUp(8, 5)) count++;  // Index
+  if (fingerUp(12, 9)) count++; // Middle
+  if (fingerUp(16, 13)) count++; // Ring
+  if (fingerUp(20, 17)) count++; // Pinky
+  return count;
+}
+
+function checkHandGesture() {
+  if (hands.length === 0) {
+    fingerHoldFrames = 0;
+    lastFingerCount = 0;
+    return;
+  }
+  let total = 0;
+  for (let h of hands) total += countFingers(h);
+
+  if (total < 1 || total > 6) {
+    fingerHoldFrames = 0;
+    return;
+  }
+
+  if (total === lastFingerCount) {
+    fingerHoldFrames++;
+  } else {
+    lastFingerCount = total;
+    fingerHoldFrames = 1;
+  }
+
+  if (fingerHoldFrames === HOLD_FRAMES && millis() - lastTriggerTime > COOLDOWN_MS) {
+    lastTriggerTime = millis();
+    fingerHoldFrames = 0;
+    let idx = total - 1;
+    if (idx >= 0 && idx < shards.length) advanceShardState(shards[idx]);
+  }
+}
+
+// ================= FULL-SCREEN VIDEO =================
+
+function drawFullScreenVideo() {
+  push();
+  translate(CANVAS_W, 0);
+  scale(-1, 1);
+  image(video, videoOffsetX(), videoOffsetY(), videoDisplayW(), videoDisplayH());
+  
+  // LIGHT BLACK FILTER
+  resetMatrix();
+  fill(0, 120); 
+  rect(0, 0, CANVAS_W, CANVAS_H);
+  pop();
+
+  if (openStartTime > 0) {
+    let cx = CANVAS_W / 2;
+    let cy = CANVAS_H / 2;
+    let prog = map(millis() - openStartTime, 0, 2000, 0, TWO_PI);
+    let r = min(CANVAS_W, CANVAS_H) * 0.06;
+    push();
+    stroke(255, 255, 255, 190);
+    strokeWeight(3 * SCALE);
+    noFill();
+    beginShape();
+    for (let a = -HALF_PI; a <= prog - HALF_PI; a += 0.04) {
+      vertex(cx + cos(a) * r, cy + sin(a) * r);
+    }
+    endShape();
+    pop();
+  }
+}
+
+// ================= GENERATION FISSURES =================
+
+function pointOnScreenEdge(angle) {
+  let cx = CANVAS_W / 2;
+  let cy = CANVAS_H / 2;
+  let dx = Math.cos(angle);
+  let dy = Math.sin(angle);
+  let tx = dx !== 0 ? (dx > 0 ? (CANVAS_W - cx) : -cx) / dx : Infinity;
+  let ty = dy !== 0 ? (dy > 0 ? (CANVAS_H - cy) : -cy) / dy : Infinity;
+  let t = Math.min(Math.abs(tx), Math.abs(ty));
+  return { x: cx + dx * t, y: cy + dy * t };
+}
+
+function perimeterSegment(p1, p2) {
+  const W = CANVAS_W, H = CANVAS_H;
+  const EPS = 1;
+  function getWall(p) {
+    if (Math.abs(p.y) < EPS) return 0;
+    if (Math.abs(p.x - W) < EPS) return 1;
+    if (Math.abs(p.y - H) < EPS) return 2;
+    if (Math.abs(p.x) < EPS) return 3;
+    return -1;
+  }
+  function perimPos(p) {
+    let perim = 2 * (W + H);
+    let w = getWall(p);
+    if (w === 0) return p.x / perim;
+    if (w === 1) return (W + p.y) / perim;
+    if (w === 2) return (W + H + (W - p.x)) / perim;
+    if (w === 3) return (2 * W + H + (H - p.y)) / perim;
+    return 0;
+  }
+  const corners = [{ x: W, y: 0 }, { x: W, y: H }, { x: 0, y: H }, { x: 0, y: 0 }];
+  let pos1 = perimPos(p1);
+  let pos2 = perimPos(p2);
+  if (pos2 <= pos1) pos2 += 1;
+  let pts = [];
+  for (let c of corners) {
+    let cp = perimPos(c);
+    if (cp <= pos1) cp += 1;
+    if (cp > pos1 && cp < pos2) pts.push(c);
+  }
+  pts.sort((a, b) => {
+    let pa = perimPos(a); if (pa <= pos1) pa += 1;
+    let pb = perimPos(b); if (pb <= pos1) pb += 1;
+    return pa - pb;
+  });
+  pts.push(p2);
+  return pts;
 }
 
 function createOrganicCracks() {
@@ -95,43 +259,32 @@ function createOrganicCracks() {
   shards = [];
   let centerX = CANVAS_W / 2;
   let centerY = CANVAS_H / 2;
-
   let angles = [];
   for (let i = 0; i < NB_FISSURES; i++) {
     angles.push(map(i, 0, NB_FISSURES, 0, TWO_PI) + random(-0.1, 0.1));
   }
-
+  let edgePts = angles.map(a => pointOnScreenEdge(a));
   let spokes = [];
-  for (let a of angles) {
-    spokes.push(generateJaggedLineToEllipse(centerX, centerY, a));
+  for (let i = 0; i < angles.length; i++) {
+    spokes.push(generateJaggedSpoke(centerX, centerY, angles[i], edgePts[i]));
   }
-
   for (let i = 0; i < spokes.length; i++) {
     let currentSpoke = spokes[i];
     let nextSpoke = spokes[(i + 1) % spokes.length];
-
+    let edgePt1 = edgePts[i];
+    let edgePt2 = edgePts[(i + 1) % edgePts.length];
     let shardPoints = [];
     shardPoints.push({ x: centerX, y: centerY });
     for (let p of currentSpoke) shardPoints.push(p);
-
-    let a1 = angles[i];
-    let a2 = angles[(i + 1) % angles.length];
-    if (a2 < a1) a2 += TWO_PI;
-    for (let step = 1; step <= 10; step++) {
-      let a = map(step, 0, 10, a1, a2);
-      shardPoints.push(pointOnEllipse(a));
-    }
-
-    for (let j = nextSpoke.length - 1; j >= 0; j--) {
-      shardPoints.push(nextSpoke[j]);
-    }
-
+    let perimPts = perimeterSegment(edgePt1, edgePt2);
+    for (let p of perimPts) shardPoints.push(p);
+    for (let j = nextSpoke.length - 1; j >= 0; j--) shardPoints.push(nextSpoke[j]);
     let centroid = calculateCentroid(shardPoints);
-
     shards.push({
       points: shardPoints,
       id: i + 1,
       clickState: 0,
+      lastStateChange: 0,
       angle: 0,   targetAngle: 0,
       scale: 1,   targetScale: 1,
       offsetX: 0, targetOffsetX: 0,
@@ -144,16 +297,15 @@ function createOrganicCracks() {
   }
 }
 
-function generateJaggedLineToEllipse(x, y, angle) {
-  let edgePt = pointOnEllipse(angle);
+function generateJaggedSpoke(x, y, angle, edgePt) {
   let pts = [];
   let steps = 6;
   for (let i = 1; i <= steps; i++) {
     let t = i / steps;
     let baseX = lerp(x, edgePt.x, t);
     let baseY = lerp(y, edgePt.y, t);
-    let jitter = (i < steps) ? random(-8, 8) : 0;
-    pts.push({ x: baseX + (-sin(angle) * jitter), y: baseY + (cos(angle) * jitter) });
+    let jitter = (i < steps) ? random(-8 * SCALE, 8 * SCALE) : 0;
+    pts.push({ x: baseX + (-Math.sin(angle) * jitter), y: baseY + (Math.cos(angle) * jitter) });
   }
   return pts;
 }
@@ -173,7 +325,6 @@ function drawShard(s) {
 
   let cx = s.center.x;
   let cy = s.center.y;
-
   let tPts = s.points.map(p => ({
     x: (p.x - cx) * s.scale + cx + s.offsetX,
     y: (p.y - cy) * s.scale + cy + s.offsetY
@@ -181,16 +332,11 @@ function drawShard(s) {
 
   let tcx = cx + s.offsetX;
   let tcy = cy + s.offsetY;
-
-  let xs = tPts.map(p => p.x);
-  let ys = tPts.map(p => p.y);
-  let bx0 = min(xs), bx1 = max(xs);
-  let by0 = min(ys), by1 = max(ys);
-  let bw = bx1 - bx0;
-  let bh = by1 - by0;
+  let xs = tPts.map(p => p.x), ys = tPts.map(p => p.y);
+  let bx0 = min(xs), bx1 = max(xs), by0 = min(ys), by1 = max(ys);
+  let bw = bx1 - bx0, bh = by1 - by0;
 
   push();
-
   drawingContext.save();
   beginShape();
   for (let p of tPts) vertex(p.x, p.y);
@@ -202,168 +348,42 @@ function drawShard(s) {
   translate(-tcx, -tcy);
 
   if (abs(s.angle) < HALF_PI) {
-    // Face miroir — vidéo offsettée pour couvrir le miroir centré
     push();
-    translate(tcx, tcy);
-    scale(s.scale);
-    translate(-tcx, -tcy);
-    // Flip horizontal autour du centre du canvas
-    translate(CANVAS_W, 0);
-    scale(-1, 1);
-    image(video, videoOffsetX(), videoOffsetY(), 640, 480);
+    translate(tcx, tcy); scale(s.scale); translate(-tcx, -tcy);
+    translate(CANVAS_W, 0); scale(-1, 1);
+    image(video, videoOffsetX(), videoOffsetY(), videoDisplayW(), videoDisplayH());
+    
+    // LIGHT BLACK FILTER (on shard video)
+    resetMatrix();
+    fill(0, 120);
+    beginShape();
+    for (let p of tPts) vertex(p.x, p.y);
+    endShape(CLOSE);
     pop();
 
-  } else {
-    // Face IA avec point focal
     push();
-    translate(tcx, tcy);
-    scale(-1, 1);
-    translate(-tcx, -tcy);
-
+    fill(255, 200); noStroke(); textAlign(CENTER, CENTER);
+    textSize(14 * SCALE); textStyle(NORMAL);
+    let centroid = calculateCentroid(tPts);
+    text(s.text, centroid.x, centroid.y);
+    pop();
+  } else {
+    push();
+    translate(tcx, tcy); scale(-1, 1); translate(-tcx, -tcy);
     if (s.img && s.img.width > 0) {
       let sc = max(bw / s.img.width, bh / s.img.height) * IMG_ZOOM;
-      let iw = s.img.width  * sc;
-      let ih = s.img.height * sc;
-
-      let focalPixelX = s.focal.x * iw;
-      let focalPixelY = s.focal.y * ih;
-
-      let ix = tcx - focalPixelX;
-      let iy = tcy - focalPixelY;
-
-      ix = constrain(ix, tcx - focalPixelX, bx1 - iw + (iw - focalPixelX));
-      iy = constrain(iy, tcy - focalPixelY, by1 - ih + (ih - focalPixelY));
-
+      let iw = s.img.width * sc, ih = s.img.height * sc;
+      let ix = constrain(tcx - s.focal.x * iw, tcx - s.focal.x * iw, bx1 - iw + (iw - s.focal.x * iw));
+      let iy = constrain(tcy - s.focal.y * ih, tcy - s.focal.y * ih, by1 - ih + (ih - s.focal.y * ih));
       image(s.img, ix, iy, iw, ih);
     }
     pop();
   }
-
   drawingContext.restore();
-
-  noFill();
-  stroke(255, 110);
-  strokeWeight(1.5);
+  noFill(); stroke(255, 110); strokeWeight(1.5);
   beginShape();
   for (let p of tPts) vertex(p.x, p.y);
   endShape(CLOSE);
-
-  pop();
-
-  if (s.clickState === 1 && abs(s.angle) > HALF_PI) {
-    drawShardText(s, tPts, tcx, tcy);
-  }
-}
-
-function drawShardText(s, tPts, tcx, tcy) {
-  let onRight = tcx >= CANVAS_W / 2;
-
-  // Angle sur l'ellipse vers le côté gauche ou droit
-  let edgeAngle = onRight ? 0 : PI;
-  // Légère correction verticale pour suivre la courbure
-  let dy = tcy - CANVAS_H / 2;
-  edgeAngle += (dy / MIRROR_RY) * 0.45;
-
-  // Point d'accroche sur le bord de l'ellipse
-  let edgeX = CANVAS_W / 2 + cos(edgeAngle) * (MIRROR_RX + 14);
-  let edgeY = CANVAS_H / 2 + sin(edgeAngle) * (MIRROR_RY + 14);
-
-  // Zone de texte : entre le bord du miroir et le bord du canvas
-  // Côté droit : de edgeX+gap jusqu'à CANVAS_W - padding
-  // Côté gauche : de padding jusqu'à edgeX-gap
-  let gap = 24;
-  let padding = 18;
-
-  let textX, textW;
-  if (onRight) {
-    textX = edgeX + gap;
-    textW = CANVAS_W - padding - textX;
-  } else {
-    textX = padding;
-    textW = edgeX - gap - textX;
-  }
-
-  // Centre vertical de la zone texte : calé sur edgeY, borné dans le canvas
-  let textY = constrain(edgeY, 40, CANVAS_H - 40);
-
-  push();
-  textFont('Georgia');
-  textSize(16);
-  textLeading(26);
-
-  // Ligne de liaison du bord de l'ellipse vers la zone texte
-  stroke(255, 55);
-  strokeWeight(0.8);
-  noFill();
-  let anchorX = onRight ? textX - 6 : textX + textW + 6;
-  // Petite courbe Bezier
-  beginShape();
-  vertex(edgeX, edgeY);
-  quadraticVertex(
-    onRight ? edgeX + gap * 0.5 : edgeX - gap * 0.5,
-    edgeY,
-    anchorX,
-    textY
-  );
-  endShape();
-
-  // Point d'accroche
-  noStroke();
-  fill(255, 90);
-  circle(edgeX, edgeY, 4);
-
-  // Titre (première ligne) en plus grand
-  let lines = s.text.split('\n');
-  fill(255, 230);
-  noStroke();
-  textAlign(onRight ? LEFT : RIGHT);
-  textSize(15);
-  textStyle(ITALIC);
-  // Titre
-  text(lines[0], onRight ? textX : textX + textW, textY - 10);
-  // Corps
-  textSize(14);
-  textStyle(NORMAL);
-  fill(255, 170);
-  let bodyText = lines.slice(1).join('\n');
-  text(bodyText, onRight ? textX : textX + textW, textY + 14);
-
-  pop();
-}
-
-// ================= MIROIR OVALE =================
-
-function drawIntactMirror() {
-  push();
-  let cx = CANVAS_W / 2;
-  let cy = CANVAS_H / 2;
-
-  drawingContext.save();
-  drawingContext.beginPath();
-  drawingContext.ellipse(cx, cy, MIRROR_RX, MIRROR_RY, 0, 0, TWO_PI);
-  drawingContext.clip();
-  translate(CANVAS_W, 0);
-  scale(-1, 1);
-  image(video, videoOffsetX(), videoOffsetY(), 640, 480);
-  drawingContext.restore();
-
-  noFill();
-  stroke(255, 255, 255, 35); strokeWeight(14);
-  arc(cx - 25, cy - 40, MIRROR_RX*2-10, MIRROR_RY*2-10, -PI*0.8, -PI*0.1);
-  stroke(255, 210); strokeWeight(7);
-  ellipse(cx, cy, MIRROR_RX*2, MIRROR_RY*2);
-  stroke(255, 55); strokeWeight(1.5);
-  ellipse(cx, cy, MIRROR_RX*2-12, MIRROR_RY*2-12);
-
-  if (openStartTime > 0) {
-    let prog = map(millis() - openStartTime, 0, 2000, 0, TWO_PI);
-    stroke(255, 255, 255, 190); strokeWeight(3.5); noFill();
-    beginShape();
-    for (let a = -HALF_PI; a <= prog - HALF_PI; a += 0.04) {
-      vertex(cx + cos(a) * (MIRROR_RX+13), cy + sin(a) * (MIRROR_RY+13));
-    }
-    endShape();
-  }
   pop();
 }
 
@@ -376,9 +396,7 @@ function checkEyesOpen(face) {
   if (d > THRESHOLD) {
     if (openStartTime === 0) openStartTime = millis();
     if (millis() - openStartTime > 2000) createOrganicCracks();
-  } else {
-    openStartTime = 0;
-  }
+  } else { openStartTime = 0; }
 }
 
 // ================= SOURIS =================
@@ -407,6 +425,7 @@ function getTransformedPoints(s) {
 
 function advanceShardState(s) {
   s.clickState = (s.clickState + 1) % 3;
+  s.lastStateChange = millis(); // Track time for auto-unzoom
   if (s.clickState === 0) {
     s.targetAngle = 0; s.targetScale = 1;
     s.targetOffsetX = 0; s.targetOffsetY = 0;
@@ -440,3 +459,4 @@ function isPointInPoly(poly, px, py) {
 }
 
 function gotFaces(results) { faces = results; }
+function gotHands(results) { hands = results; }
