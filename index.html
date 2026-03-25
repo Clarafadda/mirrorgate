@@ -4,19 +4,213 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ml5.js faceMesh Webcam Example</title>
+    <title>Mirror / Fragment</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.10/p5.min.js"></script>
     <script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
-      /* Remove default canvas margin injected by p5 */
-      canvas {
-        display: block;
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      canvas { display: block; }
+      body {
+        background: #0a0a0a;
+        width: 100vw; height: 100vh;
+        overflow: hidden;
+        display: flex; align-items: center; justify-content: center;
+      }
+
+      /* ── SELECTION SCREEN ── */
+      #selection-screen {
+        position: fixed; inset: 0;
+        background: #0a0a0a;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        z-index: 100;
+      }
+      /* scanlines */
+      #selection-screen::before {
+        content: '';
+        position: fixed; inset: 0;
+        background: repeating-linear-gradient(
+          0deg, transparent, transparent 2px,
+          rgba(255,255,255,0.018) 2px, rgba(255,255,255,0.018) 4px
+        );
+        pointer-events: none; z-index: 2;
+      }
+      /* vignette */
+      #selection-screen::after {
+        content: '';
+        position: fixed; inset: 0;
+        background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.85) 100%);
+        pointer-events: none; z-index: 2;
+      }
+
+      .sel-inner {
+        position: relative; z-index: 10;
+        display: flex; flex-direction: column;
+        align-items: center; gap: 60px;
+        animation: fadeIn 1.2s ease forwards;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(12px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      .sel-title { text-align: center; }
+      .sel-eyebrow {
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 11px; letter-spacing: 0.35em;
+        color: rgba(255,255,255,0.28);
+        text-transform: uppercase; margin-bottom: 18px;
+      }
+      .sel-headline {
+        font-family: 'Cormorant Garamond', serif;
+        font-weight: 300; font-size: clamp(38px, 6vw, 72px);
+        color: rgba(255,255,255,0.92);
+        line-height: 1.05; letter-spacing: 0.02em;
+      }
+      .sel-headline em { font-style: italic; color: rgba(255,255,255,0.55); }
+      .sel-subtitle {
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 11px; letter-spacing: 0.25em;
+        color: rgba(255,255,255,0.22);
+        margin-top: 20px; text-transform: uppercase;
+      }
+      .sel-divider {
+        width: 1px; height: 40px;
+        background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.2), transparent);
+      }
+
+      .sel-cards { display: flex; gap: 24px; align-items: stretch; }
+      .sel-card {
+        position: relative; cursor: pointer;
+        width: 160px; padding: 32px 20px 28px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.025);
+        display: flex; flex-direction: column;
+        align-items: center; gap: 10px;
+        transition: border-color 0.3s, background 0.3s, transform 0.3s;
+        overflow: hidden;
+      }
+      .sel-card::before {
+        content: ''; position: absolute; inset: 0;
+        background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 60%);
+        opacity: 0; transition: opacity 0.3s;
+      }
+      .sel-card:hover {
+        border-color: rgba(255,255,255,0.45);
+        background: rgba(255,255,255,0.055);
+        transform: translateY(-4px);
+      }
+      .sel-card:hover::before { opacity: 1; }
+      .sel-card-num {
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 10px; letter-spacing: 0.3em;
+        color: rgba(255,255,255,0.2); text-transform: uppercase;
+      }
+      .sel-card-name {
+        font-family: 'Cormorant Garamond', serif;
+        font-weight: 300; font-size: 28px;
+        color: rgba(255,255,255,0.88);
+        letter-spacing: 0.05em; text-align: center;
+      }
+      .sel-card-line {
+        width: 24px; height: 1px;
+        background: rgba(255,255,255,0.18);
+        margin: 4px 0; transition: width 0.3s, background 0.3s;
+      }
+      .sel-card:hover .sel-card-line { width: 48px; background: rgba(255,255,255,0.5); }
+      .sel-card-label {
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 9px; letter-spacing: 0.25em;
+        color: rgba(255,255,255,0.18); text-transform: uppercase;
+      }
+      .sel-card.activating { animation: glitchFlash 0.5s ease forwards; }
+      @keyframes glitchFlash {
+        0%   { background: rgba(255,255,255,0.025); }
+        20%  { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.9); }
+        40%  { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.2); }
+        60%  { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.7); }
+        100% { background: rgba(255,255,255,0.025); }
+      }
+      #selection-screen.hide { animation: screenOut 0.7s ease forwards; }
+      @keyframes screenOut {
+        0%   { opacity: 1; }
+        40%  { opacity: 1; filter: brightness(3); }
+        100% { opacity: 0; filter: brightness(0); }
+      }
+
+      #sketch-container {
+        width: 100%; height: 100%;
+        display: flex; align-items: center; justify-content: center;
       }
     </style>
   </head>
-  <body class="bg-black m-0 p-0 overflow-hidden w-screen h-screen flex items-center justify-center">
-    <div id="sketch-container" class="w-full h-full flex items-center justify-center"></div>
+  <body>
+
+    <div id="selection-screen">
+      <div class="sel-inner">
+        <div class="sel-title">
+          <div class="sel-eyebrow">Mirror / Fragment</div>
+          <div class="sel-headline">Who are<br><em>you</em> today?</div>
+          <div class="sel-subtitle">Select your identity to begin</div>
+        </div>
+        <div class="sel-divider"></div>
+        <div class="sel-cards">
+          <div class="sel-card" onclick="selectUser('clara')">
+            <div class="sel-card-num">01</div>
+            <div class="sel-card-name">Clara</div>
+            <div class="sel-card-line"></div>
+            <div class="sel-card-label">Enter</div>
+          </div>
+          <div class="sel-card" onclick="selectUser('laura')">
+            <div class="sel-card-num">02</div>
+            <div class="sel-card-name">Laura</div>
+            <div class="sel-card-line"></div>
+            <div class="sel-card-label">Enter</div>
+          </div>
+          <div class="sel-card" onclick="selectUser('mariana')">
+            <div class="sel-card-num">03</div>
+            <div class="sel-card-name">Mariana</div>
+            <div class="sel-card-line"></div>
+            <div class="sel-card-label">Enter</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sketch-container"></div>
+
+    <!--
+      sketch.js is loaded here so p5 + ml5 are ready,
+      but it does NOT auto-run. It waits for selectUser() to call window.startSketch().
+    -->
     <script src="sketch.js"></script>
+
+    <script>
+      function selectUser(name) {
+        window.selectedUser = name;
+
+        // Highlight clicked card
+        document.querySelectorAll('.sel-card').forEach(function(c) {
+          if (c.querySelector('.sel-card-name').textContent.toLowerCase() === name) {
+            c.classList.add('activating');
+          }
+        });
+
+        // Start fade-out animation
+        setTimeout(function() {
+          document.getElementById('selection-screen').classList.add('hide');
+        }, 300);
+
+        // After animation: hide overlay and launch the p5 sketch
+        setTimeout(function() {
+          document.getElementById('selection-screen').style.display = 'none';
+          window.startSketch();   // <-- defined in sketch.js
+        }, 950);
+      }
+    </script>
+
   </body>
 </html>
