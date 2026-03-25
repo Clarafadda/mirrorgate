@@ -29,14 +29,67 @@ window.startSketch = function () {
     const COOLDOWN_MS  = 1200;
     let lastFingerCount = 0, fingerHoldFrames = 0, lastTriggerTime = 0;
 
-    const SHARD_TEXTS = [
-      "The Mapped Life\nI know\nwhere you are.",
-      "Public Profile\nYou can\nbe reached.",
-      "Sports Record\nNothing\ndisappears.",
-      "Search Exposure\nIt starts\nwith a search.",
-      "Face Recognition\nYour face\nis enough.",
-      "Username Everywhere\nEverything\nis connected."
-    ];
+    // ── per-user personalised texts ────────────────────────────────────
+    // Each user has 6 independent texts, one per fragment.
+    // Use \n for line breaks. Edit freely — these are completely custom.
+    const SHARD_TEXTS_BY_USER = {
+      clara: [
+        // Fragment 1
+        "The Mapped Life\nI know where you are.\n1",
+        // Fragment 2
+        "Public Profile\nI can contact you.\n2 ",
+        // Fragment 3
+        "Frozen Past\nYou never disappear.\n3",
+        // Fragment 4
+        "Search Exposure\nI can find you.\n4",
+        // Fragment 5
+        "Face Recognition\nI can recognize you.\n5",
+        // Fragment 6
+        "Username Everywhere\nI can trace you.\n6"
+      ],
+      laura: [
+        // Fragment 1
+        "The Mapped Life\nI know where you were.\n1",
+        // Fragment 2
+        "Public Profile\nI can contact you.\n2",
+        // Fragment 3
+        "Public face\nYour face can be used\n3",
+        // Fragment 4
+        "Search Exposure\nI can find you.\n4",
+        // Fragment 5
+        "Face Recognition\nI can recognize you.\n5",
+        // Fragment 6
+        "Frozen Past\nYou never disappear.\n6"
+      ],
+      mariana: [
+        // Fragment 1
+        "Your text here\nfor Mariana\nfragment 1.",
+        // Fragment 2
+        "Your text here\nfor Mariana\nfragment 2.",
+        // Fragment 3
+        "Your text here\nfor Mariana\nfragment 3.",
+        // Fragment 4
+        "Your text here\nfor Mariana\nfragment 4.",
+        // Fragment 5
+        "Your text here\nfor Mariana\nfragment 5.",
+        // Fragment 6
+        "Your text here\nfor Mariana\nfragment 6."
+      ]
+    };
+
+    function getShardTexts() {
+      const user = window.selectedUser;
+      return (user && SHARD_TEXTS_BY_USER[user])
+        ? SHARD_TEXTS_BY_USER[user]
+        : [
+            "The Mapped Life\nI know\nwhere you are.",
+            "Public Profile\nYou can\nbe reached.",
+            "Sports Record\nNothing\ndisappears.",
+            "Search Exposure\nIt starts\nwith a search.",
+            "Face Recognition\nYour face\nis enough.",
+            "Username Everywhere\nEverything\nis connected."
+          ];
+    }
 
     const FOCAL_POINTS = [
       { x: 0.4,  y: 0.4  },
@@ -222,6 +275,7 @@ window.startSketch = function () {
       const edgePts = angles.map(a => pointOnScreenEdge(a));
       const spokes  = angles.map((a, i) => generateJaggedSpoke(cx, cy, a, edgePts[i]));
 
+      const shardTexts = getShardTexts();
       for (let i = 0; i < spokes.length; i++) {
         const cur = spokes[i], nxt = spokes[(i + 1) % spokes.length];
         const e1  = edgePts[i], e2 = edgePts[(i + 1) % edgePts.length];
@@ -229,6 +283,7 @@ window.startSketch = function () {
         shards.push({
           points: pts, id: i + 1,
           clickState: 0, lastStateChange: 0,
+          hasBeenFlipped: false,
           angle: 0, targetAngle: 0,
           scale: 1, targetScale: 1,
           offsetX: 0, targetOffsetX: 0,
@@ -236,7 +291,7 @@ window.startSketch = function () {
           img:   aiImages[i % aiImages.length],
           focal: FOCAL_POINTS[i] || { x: 0.5, y: 0.5 },
           center: calculateCentroid(pts),
-          text:  SHARD_TEXTS[i] || ""
+          text:  shardTexts[i] || ""
         });
       }
     }
@@ -291,12 +346,14 @@ window.startSketch = function () {
         p.beginShape(); for (const pt of tPts) p.vertex(pt.x, pt.y); p.endShape(p.CLOSE);
         p.pop();
 
-        p.push();
-        p.fill(255, 200); p.noStroke(); p.textAlign(p.CENTER, p.CENTER);
-        p.textSize(14 * SCALE); p.textStyle(p.NORMAL);
-        const centroid = calculateCentroid(tPts);
-        p.text(s.text, centroid.x, centroid.y);
-        p.pop();
+        if (s.hasBeenFlipped) {
+          p.push();
+          p.fill(255, 200); p.noStroke(); p.textAlign(p.CENTER, p.CENTER);
+          p.textSize(14 * SCALE); p.textStyle(p.NORMAL);
+          const centroid = calculateCentroid(tPts);
+          p.text(s.text, centroid.x, centroid.y);
+          p.pop();
+        }
       } else {
         // image side
         p.push();
@@ -355,6 +412,7 @@ window.startSketch = function () {
         s.targetAngle = 0;  s.targetScale = 1;
         s.targetOffsetX = 0; s.targetOffsetY = 0;
       } else if (s.clickState === 1) {
+        s.hasBeenFlipped = true;
         s.targetAngle = p.PI; s.targetScale = 1.65;
         s.targetOffsetX = (CANVAS_W / 2 - s.center.x) * 0.25;
         s.targetOffsetY = (CANVAS_H / 2 - s.center.y) * 0.25;
