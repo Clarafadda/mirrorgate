@@ -20,7 +20,7 @@
         font-family: 'Cormorant Garamond', serif;
       }
 
-      /* ── MIRROR VIDEO (full screen, mirrored) ── */
+      /* ── MIRROR VIDEO (initial state) ── */
       #mirror-video {
         position: fixed; inset: 0;
         width: 100%; height: 100%;
@@ -31,18 +31,65 @@
       }
       #mirror-video.ready { opacity: 1; }
 
-      /* very subtle dark veil so text stays legible */
       #mirror-veil {
         position: fixed; inset: 0;
-        background: rgba(0,0,0,0.28);
+        background: rgba(0,0,0,0.35);
         pointer-events: none;
       }
 
-      /* ── OVERLAY FORM ── */
+      /* ── OVERLAY MESSAGES (Layered above everything) ── */
+      #overlay-messages {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100; /* Ensure this is above the p5 canvas */
+        pointer-events: none;
+        text-align: center;
+      }
+
+      .assignment-text {
+        font-style: italic;
+        font-weight: 300;
+        font-size: clamp(24px, 5vw, 42px);
+        color: rgba(255,255,255,0.9);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.8s ease, visibility 0.8s;
+        max-width: 750px;
+        line-height: 1.3;
+        letter-spacing: 0.02em;
+      }
+
+      #instruction-msg {
+        position: fixed;
+        bottom: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: rgba(255,255,255,0.5);
+        font-size: clamp(12px, 2vw, 14px);
+        letter-spacing: 0.2em;
+        font-style: italic;
+        text-transform: uppercase;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 1s ease, visibility 1s;
+        z-index: 110; 
+        pointer-events: none;
+      }
+
+      /* Force visibility */
+      .visible-now { 
+        opacity: 1 !important; 
+        visibility: visible !important; 
+      }
+
+      /* ── SELECTION SCREEN ── */
       #selection-screen {
         position: fixed; inset: 0;
         display: flex; align-items: center; justify-content: center;
-        z-index: 10;
+        z-index: 200;
         transition: opacity 0.8s ease;
       }
       #selection-screen.hide {
@@ -55,7 +102,7 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: clamp(18px, 3vw, 26px);
+        gap: 26px;
       }
 
       .form-title {
@@ -66,19 +113,15 @@
         text-align: center;
         letter-spacing: 0.02em;
         line-height: 1.1;
-        text-shadow: 0 1px 24px rgba(0,0,0,0.4);
       }
 
-      .form-rule {
-        width: 32px; height: 1px;
-        background: rgba(255,255,255,0.35);
-      }
+      .form-rule { width: 32px; height: 1px; background: rgba(255,255,255,0.35); }
 
       .fields {
         width: 100%;
         display: flex;
         flex-direction: column;
-        gap: clamp(10px, 2vw, 14px);
+        gap: 14px;
       }
 
       .fields input {
@@ -90,28 +133,15 @@
         color: #fff;
         font-family: 'Cormorant Garamond', serif;
         font-style: italic;
-        font-weight: 300;
-        font-size: clamp(18px, 4vw, 24px);
-        letter-spacing: 0.04em;
+        font-size: 24px;
         outline: none;
-        transition: border-color 0.25s;
         text-align: center;
-      }
-      .fields input::placeholder {
-        color: rgba(255,255,255,0.35);
-      }
-      .fields input:focus {
-        border-color: rgba(255,255,255,0.85);
       }
 
       #error-msg {
         font-style: italic;
-        font-weight: 300;
-        font-size: clamp(11px, 2vw, 13px);
+        font-size: 13px;
         color: rgba(255,200,190,0.85);
-        letter-spacing: 0.08em;
-        text-align: center;
-        min-height: 16px;
         opacity: 0;
         transition: opacity 0.3s;
       }
@@ -123,41 +153,40 @@
         color: rgba(255,255,255,0.85);
         font-family: 'Cormorant Garamond', serif;
         font-style: italic;
-        font-weight: 300;
-        font-size: clamp(13px, 2.5vw, 16px);
         letter-spacing: 0.18em;
-        padding: clamp(10px,2vw,13px) clamp(28px,5vw,44px);
+        padding: 12px 40px;
         cursor: pointer;
-        transition: background 0.25s, color 0.25s, border-color 0.25s;
+        transition: all 0.25s;
       }
-      .form-btn:hover {
-        background: rgba(255,255,255,0.12);
-        border-color: rgba(255,255,255,0.85);
-        color: #fff;
-      }
+      .form-btn:hover { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
 
-      /* ── SKETCH SITS BEHIND EVERYTHING after selection ── */
-      #sketch-container {
-        position: fixed; inset: 0;
-        z-index: 0;
-      }
+      #sketch-container { position: fixed; inset: 0; z-index: 10; }
     </style>
   </head>
   <body>
 
-    <!-- Raw webcam mirror, no p5 yet -->
     <video id="mirror-video" autoplay playsinline muted></video>
     <div id="mirror-veil"></div>
 
+    <!-- Messages Layer -->
+    <div id="overlay-messages">
+      <div id="assignment-msg" class="assignment-text">
+        Fix the mirror and see who you<br>really are on the internet.
+      </div>
+    </div>
+
+    <div id="instruction-msg">
+      Click a fragment or hold up 1–6 fingers to switch
+    </div>
+
+    <!-- Login Form -->
     <div id="selection-screen">
       <div class="form-wrap">
         <h1 class="form-title">Who are<br>you?</h1>
         <div class="form-rule"></div>
         <div class="fields">
-          <input id="inp-first" type="text" placeholder="First name"
-                 autocomplete="given-name" spellcheck="false" />
-          <input id="inp-last"  type="text" placeholder="Last name"
-                 autocomplete="family-name" spellcheck="false" />
+          <input id="inp-first" type="text" placeholder="First name" autocomplete="off" />
+          <input id="inp-last"  type="text" placeholder="Last name" autocomplete="off" />
         </div>
         <div id="error-msg">Name not recognised.</div>
         <button class="form-btn" onclick="submitName()">Enter</button>
@@ -168,60 +197,44 @@
     <script src="sketch.js"></script>
 
     <script>
-      // Start webcam immediately for the mirror effect
+      // Setup Webcam
       navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
         .then(function(stream) {
           const v = document.getElementById('mirror-video');
           v.srcObject = stream;
-          v.onloadedmetadata = function() {
-            v.classList.add('ready');
-          };
+          v.onloadedmetadata = function() { v.classList.add('ready'); };
         })
-        .catch(function(err) {
-          console.warn('Camera not available:', err);
-        });
+        .catch(function(err) { console.warn('Camera not available:', err); });
 
-      // Name → sketch user key
-      // First-name match is enough; add full names if you need to distinguish
-      const NAME_MAP = {
-        "clara":   "clara",
-        "laura":   "laura",
-        "mariana": "mariana"
-      };
+      const NAME_MAP = { "clara": "clara", "laura": "laura", "mariana": "mariana" };
 
       function submitName() {
         const first = document.getElementById('inp-first').value.trim().toLowerCase();
         const last  = document.getElementById('inp-last').value.trim().toLowerCase();
-        const full  = (first + ' ' + last).trim();
-        const err   = document.getElementById('error-msg');
-
-        const user = NAME_MAP[full] || NAME_MAP[first] || null;
+        const user  = NAME_MAP[first + ' ' + last] || NAME_MAP[first] || null;
 
         if (!user) {
-          err.classList.add('visible');
+          document.getElementById('error-msg').classList.add('visible');
           return;
         }
-        err.classList.remove('visible');
+        
         window.selectedUser = user;
-
-        // Hide the raw video + veil — p5 will take over
-        document.getElementById('mirror-video').style.transition = 'opacity 0.5s';
-        document.getElementById('mirror-video').style.opacity = '0';
-        document.getElementById('mirror-veil').style.opacity  = '0';
-
-        // Fade out overlay
         document.getElementById('selection-screen').classList.add('hide');
 
         setTimeout(function() {
           document.getElementById('selection-screen').style.display = 'none';
-          document.getElementById('mirror-video').style.display     = 'none';
+          // Show the assignment message
+          document.getElementById('assignment-msg').classList.add('visible-now');
+          
+          // Hide raw video so p5 can take over
+          document.getElementById('mirror-video').style.opacity = '0';
+          document.getElementById('mirror-veil').style.opacity  = '0';
+          
           window.startSketch();
         }, 850);
       }
 
-      document.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') submitName();
-      });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitName(); });
     </script>
   </body>
 </html>
